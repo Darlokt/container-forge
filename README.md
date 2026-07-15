@@ -59,50 +59,86 @@ This restriction makes the branch-to-GHCR-package mapping unambiguous.
 
 ## Create or update an environment
 
-Create a branch from the latest `main` template:
+1. Start on the environment branch.
 
-```bash
-git switch main
-git pull --ff-only
-git switch -c pandas
-```
+   For a new environment, create a lowercase branch from the latest `main`:
 
-Choose Python and add dependencies with uv:
+   ```bash
+   git switch main
+   git pull --ff-only
+   git switch -c pandas
+   ```
 
-```bash
-printf '3.12\n' > .python-version
-uv python pin 3.12
-uv add pandas pyarrow
-```
+   To update an existing environment instead, switch to its branch and pull the
+   latest changes:
 
-If a Python dependency needs system libraries or compilation, add Debian
-packages to `apt-runtime.txt` and `apt-build.txt` respectively. Then validate
-the branch contract:
+   ```bash
+   git switch pandas
+   git pull --ff-only
+   ```
 
-```bash
-uv lock
-./scripts/validate-contract.sh pandas
-./scripts/test-contract.sh
-```
+2. Install the development environment and Git hook. This is only required once
+   per clone:
 
-Install the development environment and Git hook once per clone:
+   ```bash
+   uv sync
+   uv run prek install
+   ```
 
-```bash
-uv sync
-uv run prek install
-```
+3. Choose the Python version. Keep `.python-version` and the first
+   `ARG PYTHON_VERSION` line in `Dockerfile` set to the same supported version
+   (3.10 through 3.14). For example, for Python 3.12:
+
+   ```text
+   # .python-version
+   3.12
+
+   # Dockerfile
+   ARG PYTHON_VERSION=3.12
+   ```
+
+4. Add, upgrade, or remove Python packages with uv. It updates both
+   `pyproject.toml` and `uv.lock`:
+
+   ```bash
+   uv add pandas pyarrow        # add packages
+   uv add --upgrade pandas      # upgrade a package
+   uv remove pyarrow            # remove a package
+   ```
+
+5. Add any required Debian packages, one per line:
+
+   - Put libraries needed while the container runs in `apt-runtime.txt`.
+   - Put compilers and headers needed only while packages are built in
+     `apt-build.txt`.
+   - Leave either file empty when no system packages are needed.
+
+6. Refresh the lockfile and validate the environment:
+
+   ```bash
+   uv lock
+   ./scripts/validate-contract.sh "$(git branch --show-current)"
+   ./scripts/test-contract.sh
+   uv run prek run --all-files
+   ```
+
+   Fix any reported error before continuing. If a check changes `uv.lock`,
+   include the updated file in the commit.
+
+7. Review and commit every build input:
+
+   ```bash
+   git status
+   git add .python-version pyproject.toml uv.lock apt-runtime.txt apt-build.txt Dockerfile
+   git commit -m "Update pandas environment"
+   git push -u origin "$(git branch --show-current)"
+   ```
 
 Before committing, the hook pinned in `.pre-commit-config.yaml` runs uv 0.11.28
 to refresh `uv.lock`, followed by repository contract validation. If the lock
-changes, stage it and commit again. Run the same checks manually at any time:
-
-```bash
-uv run prek run --all-files
-```
-
-Commit all environment and shared files, including `uv.lock`. Changes to the
-shared Dockerfile or workflow are made on `main` and then merged into each
-environment branch. This ensures the branch commit records every build input.
+changes, stage it and commit again. Changes to shared Dockerfile or workflow
+logic are made on `main` and then merged into each environment branch. Continue
+to [Publish manually](#publish-manually) after pushing the branch.
 
 ## Publish manually
 
