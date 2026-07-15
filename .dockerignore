@@ -1,0 +1,16 @@
+.git
+.github
+.agents
+.codex
+.venv
+**/.venv
+__pycache__
+**/__pycache__
+*.py[cod]
+.cache
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.sif
+*.img
+smoke-output.txt

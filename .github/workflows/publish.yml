@@ -1,0 +1,192 @@
+name: Build and publish environment
+run-name: Publish ${{ github.ref_name }} (${{ inputs.include_arm64 && 'amd64+arm64' || 'amd64' }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_arm64:
+        description: Publish a linux/arm64 variant in addition to linux/amd64
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out selected branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: 0.11.28
+          enable-cache: true
+
+      - name: Validate environment contract
+        run: ./scripts/validate-contract.sh "$GITHUB_REF_NAME"
+
+      - name: Derive build settings
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == branch ]] || {
+            echo 'The workflow must be dispatched against a branch.' >&2
+            exit 1
+          }
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/${GITHUB_REF_NAME}"
+          if [[ "${{ inputs.include_arm64 }}" == true ]]; then
+            platforms='linux/amd64,linux/arm64'
+            platform_scope='amd64-arm64'
+          else
+            platforms='linux/amd64'
+            platform_scope='amd64'
+          fi
+          {
+            echo "image=$image"
+            echo "python_version=$(<.python-version)"
+            echo "platforms=$platforms"
+            echo "cache_scope=${GITHUB_REF_NAME}-${platform_scope}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite immutable commit tag
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing image $IMAGE:$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        if: inputs.include_arm64
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ steps.vars.outputs.image }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=Locked uv environment from branch ${{ github.ref_name }} for Nextflow tasks
+
+      - name: Build amd64 test image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          load: true
+          push: false
+          platforms: linux/amd64
+          tags: container-forge-smoke:amd64
+          build-args: PYTHON_VERSION=${{ steps.vars.outputs.python_version }}
+          cache-from: type=gha,scope=${{ steps.vars.outputs.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ steps.vars.outputs.cache_scope }}
+
+      - name: Smoke-test amd64 image
+        run: ./scripts/run-docker-smoke-test.sh container-forge-smoke:amd64 linux/amd64
+
+      - name: Build arm64 test image
+        if: inputs.include_arm64
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          load: true
+          push: false
+          platforms: linux/arm64
+          tags: container-forge-smoke:arm64
+          build-args: PYTHON_VERSION=${{ steps.vars.outputs.python_version }}
+          cache-from: type=gha,scope=${{ steps.vars.outputs.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ steps.vars.outputs.cache_scope }}
+
+      - name: Smoke-test arm64 image
+        if: inputs.include_arm64
+        run: ./scripts/run-docker-smoke-test.sh container-forge-smoke:arm64 linux/arm64
+
+      - name: Build and publish manifest
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          platforms: ${{ steps.vars.outputs.platforms }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: PYTHON_VERSION=${{ steps.vars.outputs.python_version }}
+          cache-from: type=gha,scope=${{ steps.vars.outputs.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ steps.vars.outputs.cache_scope }}
+          provenance: mode=max
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-name: ${{ steps.vars.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install Apptainer 1.5.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends software-properties-common
+          sudo add-apt-repository -y ppa:apptainer/ppa
+          sudo apt-get update
+          version="$(apt-cache madison apptainer | awk '$3 ~ /^1\.5\.1([+~:-]|$)/ { print $3; exit }')"
+          [[ -n "$version" ]] || {
+            echo 'Apptainer 1.5.1 is unavailable from the official PPA.' >&2
+            exit 1
+          }
+          sudo apt-get install -y --no-install-recommends "apptainer=$version"
+          apptainer version | grep -F '1.5.1'
+
+      - name: Smoke-test published image with Apptainer
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          APPTAINER_DOCKER_USERNAME: ${{ github.actor }}
+          APPTAINER_DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/apptainer-smoke"
+          image_file="$RUNNER_TEMP/environment.sif"
+          mkdir -p "$work"
+          cp scripts/container-smoke-test.sh "$work/"
+          chmod 0777 "$work"
+          apptainer pull "$image_file" "docker://${IMAGE}@${DIGEST}"
+          apptainer exec --cleanenv --bind "$work:/work" --pwd /work \
+            "$image_file" /bin/bash -ue /work/container-smoke-test.sh
+          [[ "$(<"$work/smoke-output.txt")" == nextflow-container-ok ]]
+          [[ "$(stat -c '%u' "$work/smoke-output.txt")" == "$(id -u)" ]]
