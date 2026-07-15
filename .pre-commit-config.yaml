@@ -8,6 +8,18 @@ repos:
         name: Refresh uv.lock
         priority: 0
 
+  - repo: builtin
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-toml
+      - id: check-yaml
+      - id: check-shebang-scripts-are-executable
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key
+
   - repo: local
     hooks:
       - id: validate-environment-contract
