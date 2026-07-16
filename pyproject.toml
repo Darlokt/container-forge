@@ -1,9 +1,13 @@
 [project]
-name = "container-environment"
+name = "omezarr-omexml-metadatalinking"
 version = "0.0.0"
-description = "Dependency-only Python environment for Nextflow tasks"
+description = "Links OME-XML to OME-Zarr metadata for use in OME-Zarr pipelines For Huch lab."
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "tifffile>=2026.7.14",
+    "polars>=1.42.1",
+    "ome-types>=0.6.3",
+]
 
 [tool.uv]
 package = false
