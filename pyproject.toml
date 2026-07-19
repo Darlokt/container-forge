@@ -1,9 +1,17 @@
 [project]
-name = "container-environment"
+name = "cv7000-post-processing"
 version = "0.0.0"
-description = "Dependency-only Python environment for Nextflow tasks"
+description = "Coontainer for post processing of nuclear cv700 data."
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "numpy>=2.4.6",
+    "ome-zarr>=0.18.0",
+    "polars>=1.42.1",
+    "pyarrow>=25.0.0",
+    "scikit-image>=0.26.0",
+    "scipy>=1.18.0",
+    "zarr>=3.2.1",
+]
 
 [tool.uv]
 package = false
