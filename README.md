@@ -14,11 +14,14 @@ Every other valid branch publishes to its own GitHub Container Registry package:
 ```text
 ghcr.io/OWNER/REPOSITORY/BRANCH:latest
 ghcr.io/OWNER/REPOSITORY/BRANCH:FULL_GIT_COMMIT_SHA
+ghcr.io/OWNER/REPOSITORY/BRANCH@sha256:OCI_IMAGE_DIGEST
 ```
 
 Use a commit tag or image digest in a released pipeline. The `latest` tag is
 intended for interactive testing and moves whenever that environment is
-published again.
+published again. A Git commit is a tag value after `:`; a content-addressed OCI
+digest includes its algorithm and follows `@`. `@FULL_GIT_COMMIT_SHA` is not a
+valid OCI image reference.
 
 ## Table of contents
 
@@ -39,7 +42,7 @@ Every environment branch must keep these files:
 - `uv.lock`: the committed uv lockfile.
 - `apt-runtime.txt`: optional Debian runtime packages, one per line.
 - `apt-build.txt`: optional build-only Debian packages, one per line.
-- The shared Dockerfile, workflow, and scripts inherited from `main`.
+- The shared Dockerfile and scripts inherited from `main`.
 
 Package entries may be unversioned (`libgomp1`) or pinned
 (`libgomp1=12.2.0-14+deb12u1`). Blank lines and `#` comments are accepted.
@@ -137,27 +140,35 @@ This restriction makes the branch-to-GHCR-package mapping unambiguous.
 Before committing, the hook pinned in `.pre-commit-config.yaml` runs uv 0.11.28
 to refresh `uv.lock`, followed by repository contract validation. If the lock
 changes, stage it and commit again. Changes to shared Dockerfile or workflow
-logic are made on `main` and then merged into each environment branch. Continue
-to [Publish manually](#publish-manually) after pushing the branch.
+logic are made on `main` and inherited by newly created environment branches.
+Publishing logic runs centrally from `main`, so future workflow fixes do not
+need to be copied into every environment branch. Continue to [Publish
+manually](#publish-manually) after pushing the branch.
 
 ## Publish manually
 
 1. Open the repository's **Actions** tab and select **Build and publish environment**.
-2. Choose **Run workflow**, then select the environment branch, not `main`.
-3. Leave `include_arm64` disabled for an amd64-only image, or enable it to test
+2. Choose **Run workflow** and leave the workflow branch set to `main`.
+3. Enter the lowercase environment branch in `environment_branch`.
+4. Leave `include_arm64` disabled for an amd64-only image, or enable it to test
    both architectures and publish a multi-platform manifest.
-4. Run the workflow.
+5. Run the workflow.
 
 The workflow validates the lock and branch contract, rejects an existing
-commit-SHA tag, tests each requested architecture, publishes `latest` and the
-full commit SHA, creates build provenance, and pulls the published amd64 digest
-through Apptainer for a final mounted-script smoke test.
+commit-SHA tag, and tests each requested architecture. It then pushes a moving
+candidate tag without BuildKit's in-index provenance, verifies its manifest
+platforms, and tests that registry tag directly through both Apptainer and a
+minimal Nextflow pipeline. Only the tested manifest is promoted to `latest` and
+the full commit SHA. A separate signed GitHub build attestation is published for
+the promoted OCI digest. CI currently defines and verifies compatibility with
+Apptainer 1.5.2 and Nextflow 26.04.6.
 
 GitHub creates each new GHCR package as private. After the first successful
 publish, open the package settings and change its visibility to **Public**.
 Repeat this once for every new environment branch/package. Public images can be
 pulled anonymously by HPC workers. The CI smoke test authenticates with its
 short-lived `GITHUB_TOKEN`, so it also works during the initial private state.
+The workflow summary reports whether anonymous access is available.
 
 ## Use from Nextflow
 
@@ -182,6 +193,16 @@ process analyse {
     """
 }
 ```
+
+For a released pipeline, the workflow summary also provides an immutable OCI
+digest reference:
+
+```groovy
+process.container = 'ghcr.io/OWNER/REPOSITORY/pandas@sha256:OCI_IMAGE_DIGEST'
+```
+
+Do not put a Git commit SHA after `@`. The commit SHA is published as a tag and
+therefore uses `:FULL_GIT_COMMIT_SHA`.
 
 For a portable configuration, use the normal GHCR name without a `docker://`
 prefix:
@@ -231,6 +252,11 @@ docker run --rm \
 - **GHCR pulls fail on the cluster:** make the package public or configure
   Apptainer registry credentials. Confirm the shared cache path is writable and
   supports atomic rename.
+- **A tag fails but its digest works:** first compare the complete digest values.
+  `@sha256:...` may select either the same image index or one platform manifest.
+  Nextflow also stores tag and digest references as different SIF files. Move the
+  tag-specific file out of `NXF_APPTAINER_CACHEDIR` and retry before concluding
+  that the registry contains different images.
 - **A commit tag already exists:** immutable tags are never overwritten. Commit
   the intended change and publish the new SHA.
 
