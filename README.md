@@ -160,8 +160,10 @@ candidate tag without BuildKit's in-index provenance, verifies its manifest
 platforms, and tests that registry tag directly through both Apptainer and a
 minimal Nextflow pipeline. Only the tested manifest is promoted to `latest` and
 the full commit SHA. A separate signed GitHub build attestation is published for
-the promoted OCI digest. CI currently defines and verifies compatibility with
-Apptainer 1.5.2 and Nextflow 26.04.6.
+the promoted OCI digest. CI verifies compatibility with the newest Apptainer
+version available from the official Ubuntu PPA at run time and with Nextflow
+26.04.6. The workflow summary records the Apptainer runtime and Debian package
+versions used for each publish.
 
 GitHub creates each new GHCR package as private. After the first successful
 publish, open the package settings and change its visibility to **Public**.

@@ -217,7 +217,8 @@ jobs:
             }
           fi
 
-      - name: Install Apptainer 1.5.2
+      - name: Install newest Apptainer from official PPA
+        id: apptainer
         shell: bash
         run: |
           set -euo pipefail
@@ -225,13 +226,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends software-properties-common
           sudo add-apt-repository -y ppa:apptainer/ppa
           sudo apt-get update
-          version="$(apt-cache madison apptainer | awk '$3 ~ /^1\.5\.2([+~:-]|$)/ { print $3; exit }')"
-          [[ -n "$version" ]] || {
-            echo 'Apptainer 1.5.2 is unavailable from the official PPA.' >&2
-            exit 1
-          }
-          sudo apt-get install -y --no-install-recommends "apptainer=$version"
-          apptainer version | grep -F '1.5.2'
+          sudo apt-get install -y --no-install-recommends apptainer
+          package_version="$(dpkg-query --show --showformat='${Version}' apptainer)"
+          runtime_version="$(apptainer version)"
+          {
+            echo "package_version=$package_version"
+            echo "runtime_version=$runtime_version"
+          } >> "$GITHUB_OUTPUT"
+          echo "Installed Apptainer package $package_version (runtime $runtime_version)"
 
       - name: Smoke-test candidate tag with Apptainer
         env:
@@ -326,6 +328,8 @@ jobs:
 
       - name: Check anonymous pull access and summarize release
         env:
+          APPTAINER_PACKAGE_VERSION: ${{ steps.apptainer.outputs.package_version }}
+          APPTAINER_RUNTIME_VERSION: ${{ steps.apptainer.outputs.runtime_version }}
           COMMIT_SHA: ${{ steps.vars.outputs.commit_sha }}
           DIGEST: ${{ steps.push.outputs.digest }}
           IMAGE: ${{ steps.vars.outputs.image }}
@@ -356,6 +360,7 @@ jobs:
             echo "- OCI digest: \`$IMAGE@$DIGEST\`"
             echo '- BuildKit in-index provenance: disabled'
             echo '- Signed GitHub build attestation: published'
+            echo "- Apptainer tested: \`$APPTAINER_RUNTIME_VERSION\` (PPA package \`$APPTAINER_PACKAGE_VERSION\`)"
             if [[ "$status" == 200 ]]; then
               echo '- Anonymous GHCR pull: available'
             else
