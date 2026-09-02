@@ -3,7 +3,7 @@
 ARG PYTHON_VERSION=3.12
 
 # uv 0.11.28, pinned to its multi-platform OCI index digest.
-FROM ghcr.io/astral-sh/uv:0.11.31@sha256:ecd4de2f060c64bea0ff8ecb182ddf46ba3fcccdc8a60cfdbaf20d1a047d7437 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.9@sha256:8b940d3a9d65bed080436972241af2e21c84b5e8c9193f7014ed71479ee795ff AS uv
 
 FROM python:${PYTHON_VERSION}-slim-trixie AS builder
 
